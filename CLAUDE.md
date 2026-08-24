@@ -228,7 +228,25 @@ language, drop stale/redundant chrome.
     **ArticleReader shows both**; search matches `title` and `title_zh` alike.
   - Future article-level AI output (body translation, summaries) must **not** follow this shape:
     on-demand from the reader, output in a side table — never a body-sized column here.
-  - Rationale: `docs/plan-title-translation.md`, `docs/plan-translation-context.md`.
+  - **The endpoint runs locally** (Ollama, `http://localhost:11434/v1`), and the model it serves
+    must be a **general instruct model that does not think**. Both halves are scar tissue:
+    - A *dedicated translation* model (Hunyuan-MT-7B and friends) cannot run this prompt. Its chat
+      template has no multi-turn support, so `exampleTurns` is silently dropped, and it has no
+      instruction layer to honour 「只有「标题：」后面那一行需要翻译」 — measured, it translated the
+      **摘要 instead of the 标题 in 6 of 10 titles**, and `maxGrowth` cannot catch that because a
+      translated summary fits inside the bound. Its native single-instruction template is correct
+      but discards both the summary context and the editorial register.
+    - A *thinking* model empties every row. The app sends DeepSeek's `thinking:{"type":"disabled"}`;
+      Ollama ignores it without a 400, so the 400-retry never fires, and `maxCompletionTokens`
+      truncates the model mid-thought into **empty content** — which the worker settles as "no
+      translation, don't retry", permanently. Stock `qwen3:8b` translated 0 of 10.
+    - The fix is baked into the model artifact, not the request: `scripts/ollama/Modelfile.translate`
+      derives `feedoverflow-translate` from `qwen3:8b` with `/no_think` forced in the template. That
+      keeps `internal/translate` a plain OpenAI-compatible client with no per-provider branch —
+      Ollama's `reasoning_effort:"none"` would work too, and is deliberately not sent for that reason.
+      Recreate it after an Ollama reinstall or the app silently stops translating.
+  - Rationale: `docs/plan-title-translation.md`, `docs/plan-translation-context.md`,
+    `docs/plan-local-llm-ollama.md`.
 - Auth: when `AUTH_USER`/`AUTH_PASS` are set, every `/api/*` request on the public router requires
   a valid session cookie (no localhost bypass — gated by socket, not IP). Login is rate-limited.
 
